@@ -3,6 +3,9 @@
 
 '''
 Example to demonstrate usage the AWS Kinesis Video Streams (KVS) Consumer Library for Python.
+
+Changelog:
+9/16/2025, Todd Stephenson: Modify get_media_wrapper() to support a custom start time
  '''
  
 __version__ = "0.0.1"
@@ -10,6 +13,7 @@ __status__ = "Development"
 __copyright__ = "Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved."
 __author__ = "Dean Colcott <https://www.linkedin.com/in/deancolcott/>"
 
+import datetime
 import os
 import sys
 import time
@@ -25,8 +29,8 @@ logging.basicConfig(format="[%(name)s.%(funcName)s():%(lineno)d] - [%(levelname)
                     level=logging.INFO)
 
 # Update the desired region and KVS stream name.
-REGION='[ENTER_REGION]'
-KVS_STREAM01_NAME = '[ENTER_KVS_STREAM_NAME]'   # Stream must be in specified region
+REGION = os.environ['AWS_REGION']
+KVS_STREAM01_NAME = os.environ['KVS_STREAM_NAME']   # Stream must be in specified region
 
 
 class KvsPythonConsumerExample:
@@ -34,7 +38,7 @@ class KvsPythonConsumerExample:
     Example class to demonstrate usage the AWS Kinesis Video Streams KVS) Consumer Library for Python.
     '''
 
-    def __init__(self):
+    def __init__(self, start_selector):
         '''
         Initialize the KVS clients as needed. The KVS Comsumer Library intentionally does not abstract 
         the KVS clients or the various media API calls. These have individual authentication configuration and 
@@ -55,35 +59,36 @@ class KvsPythonConsumerExample:
         # Attach session specific configuration (such as the authentication pattern)
         self.session = boto3.Session(region_name=REGION)
         self.kvs_client = self.session.client("kinesisvideo")
+        self.initial_start_selector = start_selector
+
+    def get_media_wrapper(self, start_selector):
+        ####################################################
+        # Start an instance of the KvsConsumerLibrary reading in a Kinesis Video Stream
+
+        # Get the KVS Endpoint for the GetMedia Call for this stream
+        log.info(f'Getting KVS GetMedia Endpoint for stream: {KVS_STREAM01_NAME} ........')
+        get_media_endpoint = self._get_data_endpoint(KVS_STREAM01_NAME, 'GET_MEDIA')
+
+        # Get the KVS Media client for the GetMedia API call
+        log.info(f'Initializing KVS Media client for stream: {KVS_STREAM01_NAME}........')
+        kvs_media_client = self.session.client('kinesis-video-media', endpoint_url=get_media_endpoint)
+
+        # Make a KVS GetMedia API call with the desired KVS stream and StartSelector type and time bounding.
+        log.info(f'Requesting KVS GetMedia Response for stream: {KVS_STREAM01_NAME} {start_selector}........')
+        get_media_response = kvs_media_client.get_media(
+            StreamName=KVS_STREAM01_NAME,
+            StartSelector=start_selector
+        )
+        return get_media_response
 
     ####################################################
     # Main process loop
     def service_loop(self):
         
-        ####################################################
-        # Start an instance of the KvsConsumerLibrary reading in a Kinesis Video Stream
-
-        # Get the KVS Endpoint for the GetMedia Call for this stream
-        log.info(f'Getting KVS GetMedia Endpoint for stream: {KVS_STREAM01_NAME} ........') 
-        get_media_endpoint = self._get_data_endpoint(KVS_STREAM01_NAME, 'GET_MEDIA')
-        
-        # Get the KVS Media client for the GetMedia API call
-        log.info(f'Initializing KVS Media client for stream: {KVS_STREAM01_NAME}........') 
-        kvs_media_client = self.session.client('kinesis-video-media', endpoint_url=get_media_endpoint)
-
-        # Make a KVS GetMedia API call with the desired KVS stream and StartSelector type and time bounding.
-        log.info(f'Requesting KVS GetMedia Response for stream: {KVS_STREAM01_NAME}........') 
-        get_media_response = kvs_media_client.get_media(
-            StreamName=KVS_STREAM01_NAME,
-            StartSelector={
-                'StartSelectorType': 'NOW'
-            }
-        )
-
         # Initialize an instance of the KvsConsumerLibrary, provide the GetMedia response and the required call-backs
         log.info(f'Starting KvsConsumerLibrary for stream: {KVS_STREAM01_NAME}........') 
         my_stream01_consumer = KvsConsumerLibrary(KVS_STREAM01_NAME, 
-                                              get_media_response, 
+                                              self.get_media_wrapper(self.initial_start_selector),
                                               self.on_fragment_arrived, 
                                               self.on_stream_read_complete, 
                                               self.on_stream_read_exception
@@ -193,9 +198,9 @@ class KvsPythonConsumerExample:
             frag_file_name = self.last_good_fragment_tags['AWS_KINESISVIDEO_FRAGMENT_NUMBER'] + '.mkv' # Update as needed
             frag_file_path = os.path.join(save_dir, frag_file_name)
             # Uncomment below to enable this function - will take a significant amount of disk space if left running unchecked:
-            #log.info('')
-            #log.info(f'####### Saving fragment to local disk at: {frag_file_path}')
-            #self.kvs_fragment_processor.save_fragment_as_local_mkv(fragment_bytes, frag_file_path)
+            # log.info('')
+            # log.info(f'####### Saving fragment to local disk at: {frag_file_path}')
+            # self.kvs_fragment_processor.save_fragment_as_local_mkv(fragment_bytes, frag_file_path)
 
             ###########################################
             # 4) Extract Frames from Fragment as ndarrays:
@@ -294,13 +299,14 @@ class KvsPythonConsumerExample:
         '''
 
         # Can choose to restart the KvsConsumerLibrary thread at the last received fragment with below example StartSelector
-        #StartSelector={
-        #    'StartSelectorType': 'FRAGMENT_NUMBER',
-        #    'AfterFragmentNumber': self.last_good_fragment_tags['AWS_KINESISVIDEO_CONTINUATION_TOKEN'],
-        #}
+        StartSelector={
+            'StartSelectorType': 'FRAGMENT_NUMBER',
+            'AfterFragmentNumber': self.last_good_fragment_tags['AWS_KINESISVIDEO_CONTINUATION_TOKEN'],
+        }
 
         # Here we just log the error 
         print(f'####### ERROR: Exception on read stream: {stream_name}\n####### Fragment Tags:\n{self.last_good_fragment_tags}\nError Message:{error}')
+        return self.get_media_wrapper(StartSelector)
 
     ####################################################
     # KVS Helpers
@@ -319,6 +325,8 @@ if __name__ == "__main__":
     Main method for example KvsConsumerLibrary
     '''
     
-    kvsConsumerExample = KvsPythonConsumerExample()
+    start_time = datetime.datetime.now() if len(sys.argv) == 1 else datetime.datetime.strptime(sys.argv[1], '%Y%m%d%H%M%S')
+    start_selector = {'StartSelectorType': 'PRODUCER_TIMESTAMP', 'StartTimestamp': start_time}
+    kvsConsumerExample = KvsPythonConsumerExample(start_selector)
     kvsConsumerExample.service_loop()
 

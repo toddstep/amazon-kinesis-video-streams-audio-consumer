@@ -34,6 +34,9 @@ Credits:
 # For convenance a slightly modified version of EMBLite is shipped with the KvsConsumerLibrary but adding credit where its due. 
 # EMBLite MIT License: https://github.com/MideTechnology/ebmlite/blob/development/LICENSE
 
+Changelog:
+9/16/2025, Todd Stephenson: Recreate endpoint and get_media request when the endpoint times out
+
  '''
  
 __version__ = "0.0.1"
@@ -54,7 +57,7 @@ class KvsConsumerLibrary(Thread):
 
     def __init__(self, 
                 stream_name, 
-                get_media_response_object, 
+                get_media_response_object,
                 on_fragment_arrived, 
                 on_read_stream_complete, 
                 on_read_stream_exception):
@@ -146,82 +149,84 @@ class KvsConsumerLibrary(Thread):
 
         '''
 
-        try:
-            # Get the steam botocore.response.Streamingody object from the provided GetMedia response
-            kvs_streaming_buffer=self.get_media_response_object['Payload']
+        # Recreate endpoint and get_media request when it expires
+        # https://github.com/aws/amazon-kinesis-video-streams-parser-library/issues/108
+        while True:
+            try:
+                chunk_buffer = bytearray()
+                fragment_read_start_time = timeit.default_timer()
 
-            #########################################
-            # Iterate through reading and parsing streaming body response of KVS GET Media API call to MKV fragments.
-            #########################################
-            chunk_buffer = bytearray()
-            fragment_read_start_time = timeit.default_timer()
+                chunk_read_count = 0
+                # Get the steam botocore.response.Streamingody object from the provided GetMedia response
+                kvs_streaming_buffer=self.get_media_response_object['Payload']
 
-            chunk_read_count = 0
+                #########################################
+                # Iterate through reading and parsing streaming body response of KVS GET Media API call to MKV fragments.
+                #########################################
             
-            # Uses the StreamingBody object iterator to read in (default 1024 byte) chunks from the streaming buffer.
-            for chunk in kvs_streaming_buffer:
+                # Uses the StreamingBody object iterator to read in (default 1024 byte) chunks from the streaming buffer.
+                for chunk in kvs_streaming_buffer:
+                    if self._stop_get_media:
+                        break
 
-                if self._stop_get_media:
-                    break
+                    # Append chunk bytes to ByteArray buffer while waiting for the entire MKV fragment to arrive.
+                    chunk_buffer.extend(chunk)
 
-                # Append chunk bytes to ByteArray buffer while waiting for the entire MKV fragment to arrive.
-                chunk_buffer.extend(chunk)
+                    #############################################
+                    # Parse current byte buffer to MKV EBML DOM like object using EBMLite
+                    #############################################
+                    fragement_intrum_dom = self.schema.loads(chunk_buffer)
 
-                #############################################
-                # Parse current byte buffer to MKV EBML DOM like object using EBMLite
-                #############################################
-                fragement_intrum_dom = self.schema.loads(chunk_buffer)
+                    #############################################
+                    #  Process a complete fragment if its arrived and send to the on_fragment_arrived callback. 
+                    #############################################
+                    # EBML header elements indicate the start of a new fragment. Here we check if the start of a second fragment
+                    # has arrived and use its start to identify the byte boundary of the first complete fragment to process.
+                    ebml_header_elements = self._get_ebml_header_elements(fragement_intrum_dom)
 
-                #############################################
-                #  Process a complete fragment if its arrived and send to the on_fragment_arrived callback. 
-                #############################################
-                # EBML header elements indicate the start of a new fragment. Here we check if the start of a second fragment
-                # has arrived and use its start to identify the byte boundary of the first complete fragment to process.
-                ebml_header_elements = self._get_ebml_header_elements(fragement_intrum_dom)
+                    # If multiple fragment headers then the first fragment has been received completely and ready to process.
+                    if (len(ebml_header_elements) > 1):
+                        # Get the offset for the first and second fragments. First fragment offset should be zero or fragment boundary is out of sync!
+                        first_ebml_header_offset = ebml_header_elements[0].offset 
+                        second_ebml_header_offset = ebml_header_elements[1].offset 
 
-                # If multiple fragment headers then the first fragment has been received completely and ready to process.
-                if (len(ebml_header_elements) > 1):
+                        # Isolate the bytes from the first complete MKV fragments in the received chunk data
+                        fragment_bytes = chunk_buffer[first_ebml_header_offset : second_ebml_header_offset]
+
+                        # Parse the complete fragment as EBML to a DOM like object
+                        fragment_dom = self.schema.loads(fragment_bytes)
+
+                        # Calculate duration taken receiving this fragment - just for telemetry of the steaming data. 
+                        fragment_receive_duration = timeit.default_timer() - fragment_read_start_time
                     
-                    # Get the offset for the first and second fragments. First fragment offset should be zero or fragment boundary is out of sync!
-                    first_ebml_header_offset = ebml_header_elements[0].offset 
-                    second_ebml_header_offset = ebml_header_elements[1].offset 
+                        # Forward fragment to the on_fragment_arrived callback.
+                        self.on_fragment_arrived_callback(self.stream_name, 
+                                                          fragment_bytes, 
+                                                          fragment_dom, 
+                                                          fragment_receive_duration)
 
-                    # Isolate the bytes from the first complete MKV fragments in the received chunk data
-                    fragment_bytes = chunk_buffer[first_ebml_header_offset : second_ebml_header_offset]
+                        # Remove the processed MKV segment from the raw byte chunk_buffer
+                        chunk_buffer = chunk_buffer[second_ebml_header_offset: ]
 
-                    # Parse the complete fragment as EBML to a DOM like object
-                    fragment_dom = self.schema.loads(fragment_bytes)
+                        # Reset the chunk read count. 
+                        chunk_read_count = 0
 
-                    # Calculate duration taken receiving this fragment - just for telemetry of the steaming data. 
-                    fragment_receive_duration = timeit.default_timer() - fragment_read_start_time
-                    
-                    # Forward fragment to the on_fragment_arrived callback.
-                    self.on_fragment_arrived_callback(self.stream_name, 
-                                                      fragment_bytes, 
-                                                      fragment_dom, 
-                                                      fragment_receive_duration)
-
-                    # Remove the processed MKV segment from the raw byte chunk_buffer
-                    chunk_buffer = chunk_buffer[second_ebml_header_offset: ]
-
-                    # Reset the chunk read count. 
-                    chunk_read_count = 0
-
-                    # Reset the start time for the next segment iteration just to time fragment durations
-                    fragment_read_start_time = timeit.default_timer()
+                        # Reset the start time for the next segment iteration just to time fragment durations
+                        fragment_read_start_time = timeit.default_timer()
                 
-                #############################################
-                # Increment to chunk read count for this fragment
-                chunk_read_count +=1
+                    #############################################
+                    # Increment to chunk read count for this fragment
+                    chunk_read_count +=1
+                self.get_media_response_object = self.on_read_stream_exception(self.stream_name, "NO ERROR. ENDPOINT PRESUMABLY TIMED OUT")
+            except Exception as err:
+                # Pass any exceptions to exception callback.
+                self.get_media_response_object = self.on_read_stream_exception(self.stream_name, err)
 
-            #############################################
-            # Exit the thread if the stream has no more chunks.
-            #############################################
-            #call the on_stream_read_complete() callback and exit the thread.
-            self.on_read_stream_complete_callback(self.stream_name)
+        #############################################
+        # Exit the thread if the stream has no more chunks.
+        #############################################
+        #call the on_stream_read_complete() callback and exit the thread.
+        self.on_read_stream_complete_callback(self.stream_name)
 
-        except Exception as err:
-            # Pass any exceptions to exception callback.
-            self.on_read_stream_exception(self.stream_name, err)
         
 
