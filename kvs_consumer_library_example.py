@@ -4,7 +4,28 @@
 '''
 Example to demonstrate usage the AWS Kinesis Video Streams (KVS) Consumer Library for Python.
 
+Sample usage:
+- Create DYNAMO_TABLE:
+  Partition Key: species (String)
+  Sort Key: time (Number)
+- Add the following IAM permissions:
+  KVS_STREAM_NAME:
+    kinesisvideo:GetDataEndpoint
+    kinesisvideo:GetMedia
+  LAMBDA_FUNCTION:
+    lambda:InvokeFunction
+  DYNAMO_TABLE:
+    dynamodb:BatchWriteItem
+- Define and export the following shell variables:
+  LAMBDA_FUNCTION
+  DYNAMO_TABLE
+  KVS_STREAM_NAME
+  AWS_REGION
+- Execute the following command:
+  python kvs_consumer_library_example.py 20250901120000
+
 Changelog:
+9/22/2025, Todd Stephenson: Analyze each MKV file using AudioProcessing class
 9/16/2025, Todd Stephenson: Modify get_media_wrapper() to support a custom start time
  '''
  
@@ -21,6 +42,7 @@ import boto3
 import logging
 from amazon_kinesis_video_consumer_library.kinesis_video_streams_parser import KvsConsumerLibrary
 from amazon_kinesis_video_consumer_library.kinesis_video_fragment_processor import KvsFragementProcessor
+from audio_processing import AudioProcessing
 
 # Config the logger.
 log = logging.getLogger(__name__)
@@ -59,6 +81,7 @@ class KvsPythonConsumerExample:
         # Attach session specific configuration (such as the authentication pattern)
         self.session = boto3.Session(region_name=REGION)
         self.kvs_client = self.session.client("kinesisvideo")
+        self.audio_processor = AudioProcessing(self.session, function_name=os.environ['LAMBDA_FUNCTION'], table_name=os.environ['DYNAMO_TABLE'])
         self.initial_start_selector = start_selector
 
     def get_media_wrapper(self, start_selector):
@@ -110,7 +133,7 @@ class KvsPythonConsumerExample:
 
             #Add Main process / application logic here while KvsConsumerLibrary instance runs as a thread
             log.info("Nothn to see, just doin main application stuff in a loop here!")
-            time.sleep(5)
+            time.sleep(60)
             
             # Call below to exit the streaming get_media() thread gracefully before reaching end of stream. 
             #my_stream01_consumer.stop_thread()
@@ -186,21 +209,23 @@ class KvsPythonConsumerExample:
             # 2) Pretty Print the entire fragment DOM structure
             # ###########################################
             # Get and log the the pretty print string for entire fragment DOM structure from EBMLite parsing.
-            log.info('')
-            log.info('####### Pretty Print Fragment DOM: #######')
+            log.debug('')
+            log.debug('####### Pretty Print Fragment DOM: #######')
             pretty_frag_dom = self.kvs_fragment_processor.get_fragement_dom_pretty_string(fragment_dom)
-            log.info(pretty_frag_dom)
+            log.debug(pretty_frag_dom)
 
             ###########################################
             # 3) Write the Fragment to disk as standalone MKV file
             ###########################################
-            save_dir = 'ENTER_DIRECTORY_PATH_TO_SAVE_FRAGEMENTS'
+            save_dir = '/tmp'
             frag_file_name = self.last_good_fragment_tags['AWS_KINESISVIDEO_FRAGMENT_NUMBER'] + '.mkv' # Update as needed
             frag_file_path = os.path.join(save_dir, frag_file_name)
             # Uncomment below to enable this function - will take a significant amount of disk space if left running unchecked:
-            # log.info('')
-            # log.info(f'####### Saving fragment to local disk at: {frag_file_path}')
-            # self.kvs_fragment_processor.save_fragment_as_local_mkv(fragment_bytes, frag_file_path)
+            log.info('')
+            log.info(f'####### Saving fragment to local disk at: {frag_file_path}')
+            self.kvs_fragment_processor.save_fragment_as_local_mkv(fragment_bytes, frag_file_path)
+            self.audio_processor(frag_file_path, self.last_good_fragment_tags)
+            os.remove(frag_file_path)
 
             ###########################################
             # 4) Extract Frames from Fragment as ndarrays:
@@ -208,13 +233,13 @@ class KvsPythonConsumerExample:
             # Get a ratio of available frames in the fragment as a list of numpy.ndarray's
             # Here we just log the shape of each image array but ndarray lends itself to many powerful 
             # data science, computer vision and video analytic functions in particular.
-            one_in_frames_ratio = 5
-            log.info('')
-            log.info(f'#######  Reading 1 in {one_in_frames_ratio} Frames from fragment as ndarray:')
-            ndarray_frames = self.kvs_fragment_processor.get_frames_as_ndarray(fragment_bytes, one_in_frames_ratio)
-            for i in range(len(ndarray_frames)):
-                ndarray_frame = ndarray_frames[i]
-                log.info(f'Frame-{i} Shape: {ndarray_frame.shape}')
+            #one_in_frames_ratio = 5
+            #log.info('')
+            #log.info(f'#######  Reading 1 in {one_in_frames_ratio} Frames from fragment as ndarray:')
+            #ndarray_frames = self.kvs_fragment_processor.get_frames_as_ndarray(fragment_bytes, one_in_frames_ratio)
+            #for i in range(len(ndarray_frames)):
+            #    ndarray_frame = ndarray_frames[i]
+            #    log.info(f'Frame-{i} Shape: {ndarray_frame.shape}')
             
             ###########################################
             # 5) Save Frames from Fragment to local disk as JPGs
