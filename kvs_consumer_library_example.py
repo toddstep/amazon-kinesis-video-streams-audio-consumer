@@ -27,6 +27,7 @@ Sample usage:
 Changelog:
 9/22/2025, Todd Stephenson: Analyze each MKV file using AudioProcessing class
 9/16/2025, Todd Stephenson: Modify get_media_wrapper() to support a custom start time
+2/17/2026, Todd Stephenson: Include time in logging messages
  '''
  
 __version__ = "0.0.1"
@@ -46,7 +47,7 @@ from audio_processing import AudioProcessing
 
 # Config the logger.
 log = logging.getLogger(__name__)
-logging.basicConfig(format="[%(name)s.%(funcName)s():%(lineno)d] - [%(levelname)s] - %(message)s", 
+logging.basicConfig(format="[%(asctime)s %(name)s.%(funcName)s():%(lineno)d] - [%(levelname)s] - %(message)s",
                     stream=sys.stdout, 
                     level=logging.INFO)
 
@@ -132,7 +133,7 @@ class KvsPythonConsumerExample:
         while True:
 
             #Add Main process / application logic here while KvsConsumerLibrary instance runs as a thread
-            log.info("Nothn to see, just doin main application stuff in a loop here!")
+            log.debug("Nothn to see, just doin main application stuff in a loop here!")
             time.sleep(60)
             
             # Call below to exit the streaming get_media() thread gracefully before reaching end of stream. 
@@ -174,11 +175,11 @@ class KvsPythonConsumerExample:
         try:
             # Log the arrival of a fragment. 
             # use stream_name to identify fragments where multiple instances of the KvsConsumerLibrary are running on different streams.
-            log.info(f'\n\n##########################\nFragment Received on Stream: {stream_name}\n##########################')
+            log.debug(f'\n\n##########################\nFragment Received on Stream: {stream_name}\n##########################')
             
             # Print the fragment receive and processing duration as measured by the KvsConsumerLibrary
-            log.info('')
-            log.info(f'####### Fragment Receive and Processing Duration: {fragment_receive_duration} Secs')
+            log.debug('')
+            log.debug(f'####### Fragment Receive and Processing Duration: {fragment_receive_duration} Secs')
 
             # Get the fragment tags and save in local parameter.
             self.last_good_fragment_tags = self.kvs_fragment_processor.get_fragment_tags(fragment_dom)
@@ -189,21 +190,21 @@ class KvsPythonConsumerExample:
             producer_timestamp = float(self.last_good_fragment_tags['AWS_KINESISVIDEO_PRODUCER_TIMESTAMP'])
             server_timestamp = float(self.last_good_fragment_tags['AWS_KINESISVIDEO_SERVER_TIMESTAMP'])
             
-            log.info('')
-            log.info('####### Timestamps and Delta: ')
-            log.info(f'KVS Reported Time Behind Live {kvs_ms_behind_live} mS')
-            log.info(f'Local Time Diff to Fragment Producer Timestamp: {round(((time_now - producer_timestamp)*1000), 3)} mS')
-            log.info(f'Local Time Diff to Fragment Server Timestamp: {round(((time_now - server_timestamp)*1000), 3)} mS')
+            log.debug('')
+            log.debug('####### Timestamps and Delta: ')
+            log.debug(f'KVS Reported Time Behind Live {kvs_ms_behind_live} mS')
+            log.debug(f'Local Time Diff to Fragment Producer Timestamp: {round(((time_now - producer_timestamp)*1000), 3)} mS')
+            log.debug(f'Local Time Diff to Fragment Server Timestamp: {round(((time_now - server_timestamp)*1000), 3)} mS')
 
             ###########################################
             # 1) Extract and print the MKV Tags in the fragment
             ###########################################
             # Get the fragment MKV Tags (Meta-Data). KVS allows these to be set per fragment to convey some information 
             # about the attached frames such as location or Computer Vision labels. Here we just log them!
-            log.info('')
-            log.info('####### Fragment MKV Tags:')
+            log.debug('')
+            log.debug('####### Fragment MKV Tags:')
             for key, value in self.last_good_fragment_tags.items():
-                log.info(f'{key} : {value}')
+                log.debug(f'{key} : {value}')
 
             ###########################################
             # 2) Pretty Print the entire fragment DOM structure
@@ -221,8 +222,8 @@ class KvsPythonConsumerExample:
             frag_file_name = self.last_good_fragment_tags['AWS_KINESISVIDEO_FRAGMENT_NUMBER'] + '.mkv' # Update as needed
             frag_file_path = os.path.join(save_dir, frag_file_name)
             # Uncomment below to enable this function - will take a significant amount of disk space if left running unchecked:
-            log.info('')
-            log.info(f'####### Saving fragment to local disk at: {frag_file_path}')
+            # log.info('')
+            # log.info(f'####### Saving fragment to local disk at: {frag_file_path}')
             self.kvs_fragment_processor.save_fragment_as_local_mkv(fragment_bytes, frag_file_path)
             self.audio_processor(frag_file_path, self.last_good_fragment_tags)
             os.remove(frag_file_path)
