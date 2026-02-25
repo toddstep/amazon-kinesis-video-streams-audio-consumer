@@ -7,6 +7,8 @@ Amazon Kinesis Video Stream (KVS) Consumer Library for Python.
 This class provides post-processing fiunctions for a MKV fragement that has been parsed
 by the Amazon Kinesis Video Streams Cosumer Library for Python. 
 
+Changelog:
+2/25/2026, Todd Stephenson: provide the mkv file mode as a parameter (instead of only allowing a mode of 'wb')
  '''
  
 __version__ = "0.0.1"
@@ -104,7 +106,7 @@ class KvsFragementProcessor():
         emblite_utils.pprint(fragment_dom, out=pretty_print_str)
         return pretty_print_str.getvalue()
 
-    def save_fragment_as_local_mkv(self, fragment_bytes, file_name_path):
+    def save_fragment_as_local_mkv(self, fragment_bytes, file_name_path, open_mode='wb'):
         '''
         Save the provided fragment_bytes as stand-alone MKV file on local disk.
         fragment_bytes as it arrives in is already a well formatted MKV fragment 
@@ -120,7 +122,7 @@ class KvsFragementProcessor():
 
         '''
 
-        f = open(file_name_path, "wb")
+        f = open(file_name_path, open_mode)
         f.write(fragment_bytes)      
         f.close()
 

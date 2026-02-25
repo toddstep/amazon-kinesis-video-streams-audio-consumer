@@ -27,7 +27,8 @@ Sample usage:
 Changelog:
 9/22/2025, Todd Stephenson: Analyze each MKV file using AudioProcessing class
 9/16/2025, Todd Stephenson: Modify get_media_wrapper() to support a custom start time
-2/17/2026, Todd Stephenson: Include time in logging messages
+2/25/2026, Todd Stephenson: Include time in logging messages
+2/25/2026, Todd Stephenson: Concatenate multiple fragments and process them as a single audio stream
  '''
  
 __version__ = "0.0.1"
@@ -84,6 +85,8 @@ class KvsPythonConsumerExample:
         self.kvs_client = self.session.client("kinesisvideo")
         self.audio_processor = AudioProcessing(self.session, function_name=os.environ['LAMBDA_FUNCTION'], table_name=os.environ['DYNAMO_TABLE'])
         self.initial_start_selector = start_selector
+        self.mkv_time_thresh = 60
+        self.curr_start_fragment_tags = None
 
     def get_media_wrapper(self, start_selector):
         ####################################################
@@ -219,14 +222,27 @@ class KvsPythonConsumerExample:
             # 3) Write the Fragment to disk as standalone MKV file
             ###########################################
             save_dir = '/tmp'
-            frag_file_name = self.last_good_fragment_tags['AWS_KINESISVIDEO_FRAGMENT_NUMBER'] + '.mkv' # Update as needed
+            # frag_file_name = self.last_good_fragment_tags['AWS_KINESISVIDEO_FRAGMENT_NUMBER'] + '.mkv' # Update as needed
+            frag_file_name = 'concatented_kinesis_fragments.mkv' # Update as needed
             frag_file_path = os.path.join(save_dir, frag_file_name)
             # Uncomment below to enable this function - will take a significant amount of disk space if left running unchecked:
             # log.info('')
             # log.info(f'####### Saving fragment to local disk at: {frag_file_path}')
-            self.kvs_fragment_processor.save_fragment_as_local_mkv(fragment_bytes, frag_file_path)
-            self.audio_processor(frag_file_path, self.last_good_fragment_tags)
-            os.remove(frag_file_path)
+            if self.curr_start_fragment_tags:
+                time_since_mkv_start = float(producer_timestamp) - float(self.curr_start_fragment_tags['AWS_KINESISVIDEO_PRODUCER_TIMESTAMP'])
+                process_previous_fragments = time_since_mkv_start >= self.mkv_time_thresh
+                mkv_open_mode = 'wb' if process_previous_fragments else 'ab'
+            else:
+                time_since_mkv_start = None
+                process_previous_fragments = False
+                mkv_open_mode = 'wb'
+            if process_previous_fragments:
+                self.audio_processor(frag_file_path, self.curr_start_fragment_tags)
+            self.kvs_fragment_processor.save_fragment_as_local_mkv(fragment_bytes, frag_file_path, open_mode=mkv_open_mode)
+            if process_previous_fragments or not self.curr_start_fragment_tags:
+                self.curr_start_fragment_tags = self.last_good_fragment_tags
+            # log.info(f'Time since start {time_since_mkv_start} producer_timestamp {producer_timestamp} curr_start_fragment_tags["AWS_KINESISVIDEO_PRODUCER_TIMESTAMP"] {self.curr_start_fragment_tags["AWS_KINESISVIDEO_PRODUCER_TIMESTAMP"]} process_previous_fragments {process_previous_fragments} mkv_open_mode {mkv_open_mode}')
+            # os.remove(frag_file_path)
 
             ###########################################
             # 4) Extract Frames from Fragment as ndarrays:
